@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'dart:async';
 
 class ArmPage extends StatelessWidget {
   const ArmPage({super.key});
@@ -54,18 +55,6 @@ class ExerciseDetail extends StatelessWidget {
     required this.image,
   });
 
-  Future<void> _openCamera(BuildContext context) async {
-    final cameras = await availableCameras();
-    final firstCamera = cameras.first;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => CameraScreen(camera: firstCamera),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -89,7 +78,17 @@ class ExerciseDetail extends StatelessWidget {
             const SizedBox(height: 20),
             Center(
               child: ElevatedButton(
-                onPressed: () => _openCamera(context), // Open camera
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ExerciseTimerPage(
+                        title: title,
+                        duration: duration,
+                      ),
+                    ),
+                  );
+                },
                 child: const Text('Start'),
               ),
             ),
@@ -100,68 +99,125 @@ class ExerciseDetail extends StatelessWidget {
   }
 }
 
-class CameraScreen extends StatefulWidget {
-  final CameraDescription camera;
+class ExerciseTimerPage extends StatefulWidget {
+  final String title;
+  final String duration;
 
-  const CameraScreen({super.key, required this.camera});
+  const ExerciseTimerPage({super.key, required this.title, required this.duration});
 
   @override
-  State<CameraScreen> createState() => _CameraScreenState();
+  _ExerciseTimerPageState createState() => _ExerciseTimerPageState();
 }
 
-class _CameraScreenState extends State<CameraScreen> {
+class _ExerciseTimerPageState extends State<ExerciseTimerPage> {
   late CameraController _controller;
   late Future<void> _initializeControllerFuture;
+  bool _isCameraActive = false;
+  bool _isTimerActive = false;
+  late Timer _timer;
+  int _remainingTime = 0;
 
   @override
   void initState() {
     super.initState();
-    _controller = CameraController(
-      widget.camera,
-      ResolutionPreset.medium,
+  }
+
+  void _startCameraAndTimer() async {
+    // Start the timer based on the duration
+    setState(() {
+      _isCameraActive = true;
+      _isTimerActive = true;
+      _remainingTime = int.parse(widget.duration.split(' ')[1]) * 60; // Convert minutes to seconds
+    });
+
+    // Get the available cameras
+    final cameras = await availableCameras();
+
+    // Find the front camera
+    final frontCamera = cameras.firstWhere(
+      (camera) => camera.lensDirection == CameraLensDirection.front,
+      orElse: () => cameras.first, // Default to first camera if no front camera is found
     );
 
+    // Initialize the camera controller with the front camera
+    _controller = CameraController(
+      frontCamera,
+      ResolutionPreset.medium,
+      enableAudio: false,
+    );
     _initializeControllerFuture = _controller.initialize();
+
+    // Start the countdown timer
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingTime > 0) {
+        setState(() {
+          _remainingTime--;
+        });
+      } else {
+        _timer.cancel();
+      }
+    });
   }
 
   @override
   void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _takePicture() async {
-    try {
-      await _initializeControllerFuture;
-      final image = await _controller.takePicture();
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Picture saved at ${image.path}')),
-      );
-    } catch (e) {
-      print(e);
+    if (_controller.value.isInitialized) {
+      _controller.dispose();
     }
+    _timer.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Camera')),
-      body: FutureBuilder<void>(
-        future: _initializeControllerFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.done) {
-            return CameraPreview(_controller);
-          } else {
-            return const Center(child: CircularProgressIndicator());
-          }
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _takePicture,
-        child: const Icon(Icons.camera),
+      appBar: AppBar(title: Text(widget.title)),
+      body: Column(
+        children: [
+          // Camera Feed
+          Expanded(
+            child: _isCameraActive
+                ? FutureBuilder<void>(
+                    future: _initializeControllerFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done) {
+                        bool isFrontCamera = _controller.description.lensDirection == CameraLensDirection.front;
+                        return Transform(
+                                alignment: Alignment.center,
+                                transform: Matrix4.rotationZ(1.5708*3), // Rotate 90 degrees (π/2 in radians)
+                                child: CameraPreview(_controller),
+                              );
+
+                      } else {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                    },
+                  )
+                : const Center(child: Text('Camera not started yet')),
+          ),
+
+          // Timer and Start Button
+          Container(
+            color: Colors.blue[50],
+            height: 100,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  _isTimerActive
+                      ? 'Time Left: ${(_remainingTime ~/ 60).toString().padLeft(2, '0')}:${(_remainingTime % 60).toString().padLeft(2, '0')}'
+                      : widget.duration,
+                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 10),
+                ElevatedButton(
+                  onPressed: _isTimerActive ? null : _startCameraAndTimer,
+                  child: Text(_isTimerActive ? 'Running...' : 'Start Camera and Timer'),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
